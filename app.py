@@ -1,6 +1,3 @@
-import io
-from typing import Dict, List
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -30,29 +27,29 @@ DEFAULT_COLORS = [
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
     for col in df.columns:
-        cleaned = str(col).strip()
-        if cleaned.lower() == "store number":
+        cleaned = str(col).strip().lower()
+        if cleaned == "store number":
             rename_map[col] = "Store Number"
-        elif cleaned.lower() == "city":
+        elif cleaned == "city":
             rename_map[col] = "City"
-        elif cleaned.lower() == "state":
+        elif cleaned == "state":
             rename_map[col] = "State"
-        elif cleaned.lower() == "lat":
+        elif cleaned == "lat":
             rename_map[col] = "lat"
-        elif cleaned.lower() == "lng":
+        elif cleaned == "lng":
             rename_map[col] = "lng"
-        elif cleaned.lower() == "cluster":
+        elif cleaned == "cluster":
             rename_map[col] = "Cluster"
     return df.rename(columns=rename_map)
 
 
-def validate_columns(df: pd.DataFrame) -> List[str]:
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    return missing
+def validate_columns(df: pd.DataFrame):
+    return [c for c in REQUIRED_COLUMNS if c not in df.columns]
 
 
 def read_uploaded_file(uploaded_file) -> pd.DataFrame:
     suffix = uploaded_file.name.lower()
+
     if suffix.endswith(".xlsx") or suffix.endswith(".xls"):
         df = pd.read_excel(uploaded_file)
     elif suffix.endswith(".csv"):
@@ -61,22 +58,27 @@ def read_uploaded_file(uploaded_file) -> pd.DataFrame:
         raise ValueError("Unsupported file type. Please upload .xlsx, .xls, or .csv")
 
     df = normalize_columns(df)
+
     missing = validate_columns(df)
     if missing:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
     df = df[REQUIRED_COLUMNS].copy()
+
     df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
     df["lng"] = pd.to_numeric(df["lng"], errors="coerce")
-    df["Store Number"] = df["Store Number"].astype(str)
-    df["City"] = df["City"].astype(str)
-    df["State"] = df["State"].astype(str)
-    df["Cluster"] = df["Cluster"].astype(str)
-    df = df.dropna(subset=["lat", "lng", "Cluster"])
+    df["Store Number"] = df["Store Number"].astype(str).str.strip()
+    df["City"] = df["City"].astype(str).str.strip()
+    df["State"] = df["State"].astype(str).str.strip()
+    df["Cluster"] = df["Cluster"].astype(str).str.strip()
+
+    df = df.dropna(subset=["lat", "lng"])
+    df = df[df["Cluster"] != ""]
+
     return df
 
 
-def build_color_map(clusters: List[str]) -> Dict[str, str]:
+def build_color_map(clusters):
     color_map = {}
     for i, cluster in enumerate(clusters):
         color_map[cluster] = DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
@@ -84,10 +86,13 @@ def build_color_map(clusters: List[str]) -> Dict[str, str]:
 
 
 st.title("Cluster Site Mapper")
-st.caption("Upload a site file, filter the clusters to display, and customize cluster colors for slide-ready screenshots.")
+st.caption(
+    "Upload a site file, filter the clusters to display, and customize cluster colors for slide-ready screenshots."
+)
 
 with st.sidebar:
     st.header("Controls")
+
     uploaded_file = st.file_uploader(
         "Upload site file",
         type=["xlsx", "xls", "csv"],
@@ -96,7 +101,7 @@ with st.sidebar:
 
     point_size = st.slider("Point size", min_value=8, max_value=28, value=14, step=1)
     map_height = st.slider("Map height", min_value=500, max_value=1200, value=760, step=20)
-    show_labels = st.toggle("Show title on chart", value=True)
+    show_title = st.toggle("Show title on chart", value=True)
 
 if not uploaded_file:
     st.info("Upload your Excel file to generate the map.")
@@ -120,18 +125,18 @@ except Exception as e:
     st.stop()
 
 all_clusters = sorted(df["Cluster"].dropna().astype(str).unique().tolist())
-default_selected = all_clusters
 
 with st.sidebar:
     selected_clusters = st.multiselect(
         "Clusters to map",
         options=all_clusters,
-        default=default_selected,
+        default=all_clusters,
     )
 
     st.subheader("Cluster colors")
     base_colors = build_color_map(all_clusters)
     cluster_colors = {}
+
     for cluster in all_clusters:
         cluster_colors[cluster] = st.color_picker(
             f"{cluster}",
@@ -145,12 +150,6 @@ if filtered.empty:
     st.warning("No sites match the selected cluster filter.")
     st.stop()
 
-filtered["Label"] = (
-    "Store " + filtered["Store Number"]
-    + "<br>" + filtered["City"] + ", " + filtered["State"]
-    + "<br>Cluster: " + filtered["Cluster"]
-)
-
 fig = px.scatter_mapbox(
     filtered,
     lat="lat",
@@ -162,18 +161,23 @@ fig = px.scatter_mapbox(
         "City": True,
         "State": True,
         "Cluster": True,
-        "lat": ':.4f',
-        "lng": ':.4f',
+        "lat": ":.4f",
+        "lng": ":.4f",
     },
     zoom=3,
     height=map_height,
-    size_max=point_size,
 )
 
-fig.update_traces(marker={"size": point_size, "opacity": 0.9, "line": {"width": 0.8, "color": "#ffffff"}})
+fig.update_traces(
+    marker={
+        "size": point_size,
+        "opacity": 0.9,
+    }
+)
+
 fig.update_layout(
     mapbox_style="carto-positron",
-    margin={"l": 10, "r": 10, "t": 60 if show_labels else 10, "b": 10},
+    margin={"l": 10, "r": 10, "t": 60 if show_title else 10, "b": 10},
     paper_bgcolor="white",
     plot_bgcolor="white",
     legend=dict(
@@ -187,8 +191,14 @@ fig.update_layout(
     ),
 )
 
-if show_labels:
-    fig.update_layout(title={"text": "Site Map by Cluster", "x": 0.01, "xanchor": "left"})
+if show_title:
+    fig.update_layout(
+        title={
+            "text": "Site Map by Cluster",
+            "x": 0.01,
+            "xanchor": "left",
+        }
+    )
 
 st.plotly_chart(fig, use_container_width=True)
 
